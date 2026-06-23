@@ -23,7 +23,42 @@ API REST del Grupo 2. Gestiona autenticación, usuarios, sesiones, roles y permi
 
 Contrato completo: ver `openapi.yaml` en este repo.
 
+# Identity Service Mock
 
+## Modelo de Datos
+
+```mermaid
+erDiagram
+  USER ||--o{ USER_ROLE : tiene
+  ROLE ||--o{ USER_ROLE : asignado_a
+  ROLE ||--o{ ROLE_PERMISSION : otorga
+  PERMISSION ||--o{ ROLE_PERMISSION : incluido_en
+
+  USER {
+    uuid id PK
+    string name
+    string email
+  }
+
+  ROLE {
+    uuid id PK
+    string name
+  }
+
+  PERMISSION {
+    string name PK
+  }
+
+  USER_ROLE {
+    uuid user_id FK
+    uuid role_id FK
+  }
+
+  ROLE_PERMISSION {
+    uuid role_id FK
+    string permission_name FK
+  }
+```
 
 ## Autenticación
 Los endpoints protegidos requieren header:
