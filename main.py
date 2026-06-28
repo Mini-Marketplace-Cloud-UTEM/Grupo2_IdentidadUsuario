@@ -1,22 +1,33 @@
 import os
 from uuid import uuid4
+from typing import List, Optional
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
-from typing import Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from passlib.hash import bcrypt
 
+
+# ==========================
+# CONFIGURACIÓN BD
+# ==========================
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise RuntimeError("Falta configurar DATABASE_URL")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 
+
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
     version="1.0.0",
-    description="Mock API para E2"
+    description="Primera versión funcional con Supabase"
 )
+
 
 # ==========================
 # MODELOS
@@ -28,235 +39,21 @@ class RegisterRequest(BaseModel):
     password: str
     role: Optional[str] = "customer"
 
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-class RefreshRequest(BaseModel):
-    refresh_token: str
 
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+class ValidateRequest(BaseModel):
+    access_token: str
+
 
 class UpdateProfileRequest(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
 
-class AssignRoleRequest(BaseModel):
-    role_name: str
-
-class UserProfile(BaseModel):
-    id: str
-    name: str
-    email: str
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
-    roles: List[str]
-    active: bool
-
-# ==========================
-# DATOS MOCK
-# ==========================
-
-mock_user = {
-    "id": str(uuid4()),
-    "name": "Matias González",
-    "email": "matias@marketplace.com",
-    "phone": "+56912345678",
-    "avatar_url": "https://cdn.marketplace.local/avatar.jpg",
-    "roles": ["customer"],
-    "active": True
-}
-
-roles = [
-    {
-        "id": str(uuid4()),
-        "name": "guest",
-        "description": "Invitado",
-        "permissions": []
-    },
-    {
-        "id": str(uuid4()),
-        "name": "customer",
-        "description": "Cliente",
-        "permissions": [
-            "orders:read"
-        ]
-    },
-    {
-        "id": str(uuid4()),
-        "name": "seller",
-        "description": "Vendedor",
-        "permissions": [
-            "products:create",
-            "products:edit"
-        ]
-    },
-    {
-        "id": str(uuid4()),
-        "name": "admin",
-        "description": "Administrador",
-        "permissions": [
-            "*"
-        ]
-    }
-]
-
-permissions = [
-    {
-        "name": "orders:read",
-        "description": "Consultar pedidos"
-    },
-    {
-        "name": "products:create",
-        "description": "Crear productos"
-    },
-    {
-        "name": "products:edit",
-        "description": "Editar productos"
-    }
-]
-
-# ==========================
-# AUTH
-# ==========================
-
-@app.post("/auth/register", status_code=201)
-def register(data: RegisterRequest):
-    return {
-        "access_token": "jwt-mock",
-        "refresh_token": "refresh-mock",
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "user": {
-            **mock_user,
-            "name": data.name,
-            "email": data.email
-        }
-    }
-
-@app.post("/auth/login")
-def login(data: LoginRequest):
-    return {
-        "access_token": "jwt-mock",
-        "refresh_token": "refresh-mock",
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "user": mock_user
-    }
-
-@app.post("/auth/logout", status_code=204)
-def logout():
-    return
-
-@app.post("/auth/refresh")
-def refresh(data: RefreshRequest):
-    return {
-        "access_token": "new-jwt-mock",
-        "refresh_token": "new-refresh-mock",
-        "token_type": "Bearer",
-        "expires_in": 3600,
-        "user": mock_user
-    }
-
-@app.post("/auth/validate")
-def validate():
-    return {
-        "valid": True,
-        "user": mock_user
-    }
-
-@app.get("/auth/me")
-def me():
-    return mock_user
-
-# ==========================
-# USERS
-# ==========================
-
-@app.get("/users")
-def list_users():
-    return {
-        "total": 1,
-        "page": 1,
-        "limit": 20,
-        "users": [mock_user]
-    }
-
-@app.get("/users/{user_id}")
-def get_user(user_id: str):
-    return mock_user
-
-@app.put("/users/{user_id}")
-def update_user(user_id: str, data: UpdateProfileRequest):
-
-    updated = mock_user.copy()
-
-    if data.name:
-        updated["name"] = data.name
-
-    if data.phone:
-        updated["phone"] = data.phone
-
-    if data.avatar_url:
-        updated["avatar_url"] = data.avatar_url
-
-    return updated
-
-@app.delete("/users/{user_id}", status_code=204)
-def delete_user(user_id: str):
-    return
-
-@app.patch("/users/{user_id}/password", status_code=204)
-def change_password(user_id: str, data: ChangePasswordRequest):
-    return
-
-# ==========================
-# IDENTITY
-# ==========================
-
-@app.get("/identity/roles")
-def list_roles():
-    return roles
-
-@app.get("/identity/roles/{role_id}")
-def get_role(role_id: str):
-
-    for role in roles:
-        if role["id"] == role_id:
-            return role
-
-    raise HTTPException(
-        status_code=404,
-        detail="Rol no encontrado"
-    )
-
-@app.get("/identity/permissions")
-def list_permissions():
-    return permissions
-
-@app.get("/identity/users/{user_id}/roles")
-def get_user_roles(user_id: str):
-    return roles[:1]
-
-@app.post("/identity/users/{user_id}/roles")
-def assign_role(user_id: str, data: AssignRoleRequest):
-
-    updated = mock_user.copy()
-
-    if data.role_name not in updated["roles"]:
-        updated["roles"].append(data.role_name)
-
-    return updated
-
-@app.delete(
-    "/identity/users/{user_id}/roles/{role_id}",
-    status_code=204
-)
-def remove_role(user_id: str, role_id: str):
-    return
 
 # ==========================
 # ROOT
@@ -265,6 +62,338 @@ def remove_role(user_id: str, role_id: str):
 @app.get("/")
 def root():
     return {
-        "service": "Identity Service Mock",
-        "status": "running"
+        "service": "Identity Service",
+        "status": "running",
+        "database": "Supabase PostgreSQL"
     }
+
+
+# ==========================
+# AUTH
+# ==========================
+
+@app.post("/auth/register", status_code=201)
+def register(data: RegisterRequest):
+    db = SessionLocal()
+
+    try:
+        existing_user = db.execute(
+            text("SELECT id FROM users WHERE email = :email"),
+            {"email": data.email}
+        ).fetchone()
+
+        if existing_user:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "EMAIL_ALREADY_EXISTS",
+                    "message": "El email ya está registrado"
+                }
+            )
+
+        user_id = str(uuid4())
+        password_hash = bcrypt.hash(data.password)
+
+        db.execute(
+            text("""
+                INSERT INTO users (id, name, email, password_hash, role, active)
+                VALUES (:id, :name, :email, :password_hash, :role, true)
+            """),
+            {
+                "id": user_id,
+                "name": data.name,
+                "email": data.email,
+                "password_hash": password_hash,
+                "role": data.role
+            }
+        )
+
+        db.commit()
+
+        return {
+            "access_token": "jwt-demo-token",
+            "refresh_token": "refresh-demo-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user": {
+                "id": user_id,
+                "name": data.name,
+                "email": data.email,
+                "roles": [data.role],
+                "active": True
+            }
+        }
+
+    finally:
+        db.close()
+
+
+@app.post("/auth/login")
+def login(data: LoginRequest):
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("""
+                SELECT id, name, email, password_hash, role, active
+                FROM users
+                WHERE email = :email
+            """),
+            {"email": data.email}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "INVALID_CREDENTIALS",
+                    "message": "Credenciales inválidas"
+                }
+            )
+
+        if not bcrypt.verify(data.password, user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "INVALID_CREDENTIALS",
+                    "message": "Credenciales inválidas"
+                }
+            )
+
+        return {
+            "access_token": "jwt-demo-token",
+            "refresh_token": "refresh-demo-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "user": {
+                "id": str(user.id),
+                "name": user.name,
+                "email": user.email,
+                "roles": [user.role],
+                "active": user.active
+            }
+        }
+
+    finally:
+        db.close()
+
+
+@app.post("/auth/logout", status_code=204)
+def logout():
+    return
+
+
+@app.post("/auth/validate")
+def validate(data: ValidateRequest):
+    if data.access_token != "jwt-demo-token":
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "INVALID_TOKEN",
+                "message": "Token inválido"
+            }
+        )
+
+    return {
+        "valid": True,
+        "message": "Token válido"
+    }
+
+
+# ==========================
+# USERS
+# ==========================
+
+@app.get("/users")
+def list_users():
+    db = SessionLocal()
+
+    try:
+        users = db.execute(
+            text("""
+                SELECT id, name, email, role, active
+                FROM users
+                ORDER BY created_at DESC
+            """)
+        ).fetchall()
+
+        return {
+            "total": len(users),
+            "page": 1,
+            "limit": 20,
+            "users": [
+                {
+                    "id": str(user.id),
+                    "name": user.name,
+                    "email": user.email,
+                    "roles": [user.role],
+                    "active": user.active
+                }
+                for user in users
+            ]
+        }
+
+    finally:
+        db.close()
+
+
+@app.get("/users/{user_id}")
+def get_user(user_id: str):
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("""
+                SELECT id, name, email, role, active
+                FROM users
+                WHERE id = :id
+            """),
+            {"id": user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "USER_NOT_FOUND",
+                    "message": "Usuario no encontrado"
+                }
+            )
+
+        return {
+            "id": str(user.id),
+            "name": user.name,
+            "email": user.email,
+            "roles": [user.role],
+            "active": user.active
+        }
+
+    finally:
+        db.close()
+
+
+@app.put("/users/{user_id}")
+def update_user(user_id: str, data: UpdateProfileRequest):
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("SELECT id FROM users WHERE id = :id"),
+            {"id": user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "USER_NOT_FOUND",
+                    "message": "Usuario no encontrado"
+                }
+            )
+
+        if data.name:
+            db.execute(
+                text("UPDATE users SET name = :name WHERE id = :id"),
+                {"name": data.name, "id": user_id}
+            )
+
+        db.commit()
+
+        updated_user = db.execute(
+            text("""
+                SELECT id, name, email, role, active
+                FROM users
+                WHERE id = :id
+            """),
+            {"id": user_id}
+        ).fetchone()
+
+        return {
+            "id": str(updated_user.id),
+            "name": updated_user.name,
+            "email": updated_user.email,
+            "roles": [updated_user.role],
+            "active": updated_user.active
+        }
+
+    finally:
+        db.close()
+
+
+@app.delete("/users/{user_id}", status_code=204)
+def delete_user(user_id: str):
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("SELECT id FROM users WHERE id = :id"),
+            {"id": user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "USER_NOT_FOUND",
+                    "message": "Usuario no encontrado"
+                }
+            )
+
+        db.execute(
+            text("DELETE FROM users WHERE id = :id"),
+            {"id": user_id}
+        )
+
+        db.commit()
+        return
+
+    finally:
+        db.close()
+
+
+# ==========================
+# ROLES
+# ==========================
+
+@app.get("/identity/roles")
+def list_roles():
+    return [
+        {
+            "name": "guest",
+            "description": "Invitado",
+            "permissions": []
+        },
+        {
+            "name": "customer",
+            "description": "Cliente",
+            "permissions": ["orders:read"]
+        },
+        {
+            "name": "seller",
+            "description": "Vendedor",
+            "permissions": ["products:create", "products:edit"]
+        },
+        {
+            "name": "admin",
+            "description": "Administrador",
+            "permissions": ["*"]
+        }
+    ]
+
+
+@app.get("/identity/permissions")
+def list_permissions():
+    return [
+        {
+            "name": "orders:read",
+            "description": "Consultar pedidos"
+        },
+        {
+            "name": "products:create",
+            "description": "Crear productos"
+        },
+        {
+            "name": "products:edit",
+            "description": "Editar productos"
+        }
+    ]
