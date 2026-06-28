@@ -1,7 +1,16 @@
+import os
+from uuid import uuid4
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
-from typing import List, Optional
-from uuid import uuid4
+from typing import Optional
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from passlib.hash import bcrypt
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(bind=engine)
 
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
