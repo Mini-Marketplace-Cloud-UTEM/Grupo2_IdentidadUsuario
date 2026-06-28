@@ -1,17 +1,13 @@
 import os
+import hashlib
 from uuid import uuid4
-from typing import List, Optional
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from passlib.hash import bcrypt
 
-
-# ==========================
-# CONFIGURACIÓN BD
-# ==========================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -29,9 +25,13 @@ app = FastAPI(
 )
 
 
-# ==========================
-# MODELOS
-# ==========================
+def hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return hash_password(password) == password_hash
+
 
 class RegisterRequest(BaseModel):
     name: str
@@ -51,13 +51,7 @@ class ValidateRequest(BaseModel):
 
 class UpdateProfileRequest(BaseModel):
     name: Optional[str] = None
-    phone: Optional[str] = None
-    avatar_url: Optional[str] = None
 
-
-# ==========================
-# ROOT
-# ==========================
 
 @app.get("/")
 def root():
@@ -67,10 +61,6 @@ def root():
         "database": "Supabase PostgreSQL"
     }
 
-
-# ==========================
-# AUTH
-# ==========================
 
 @app.post("/auth/register", status_code=201)
 def register(data: RegisterRequest):
@@ -83,16 +73,10 @@ def register(data: RegisterRequest):
         ).fetchone()
 
         if existing_user:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "EMAIL_ALREADY_EXISTS",
-                    "message": "El email ya está registrado"
-                }
-            )
+            raise HTTPException(status_code=409, detail="El email ya está registrado")
 
         user_id = str(uuid4())
-        password_hash = bcrypt.hash(data.password)
+        password_hash = hash_password(data.password)
 
         db.execute(
             text("""
@@ -143,22 +127,10 @@ def login(data: LoginRequest):
         ).fetchone()
 
         if not user:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "INVALID_CREDENTIALS",
-                    "message": "Credenciales inválidas"
-                }
-            )
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-        if not bcrypt.verify(data.password, user.password_hash):
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "INVALID_CREDENTIALS",
-                    "message": "Credenciales inválidas"
-                }
-            )
+        if not verify_password(data.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
         return {
             "access_token": "jwt-demo-token",
@@ -186,23 +158,13 @@ def logout():
 @app.post("/auth/validate")
 def validate(data: ValidateRequest):
     if data.access_token != "jwt-demo-token":
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "INVALID_TOKEN",
-                "message": "Token inválido"
-            }
-        )
+        raise HTTPException(status_code=401, detail="Token inválido")
 
     return {
         "valid": True,
         "message": "Token válido"
     }
 
-
-# ==========================
-# USERS
-# ==========================
 
 @app.get("/users")
 def list_users():
@@ -219,8 +181,6 @@ def list_users():
 
         return {
             "total": len(users),
-            "page": 1,
-            "limit": 20,
             "users": [
                 {
                     "id": str(user.id),
@@ -252,13 +212,7 @@ def get_user(user_id: str):
         ).fetchone()
 
         if not user:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "USER_NOT_FOUND",
-                    "message": "Usuario no encontrado"
-                }
-            )
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
         return {
             "id": str(user.id),
@@ -283,13 +237,7 @@ def update_user(user_id: str, data: UpdateProfileRequest):
         ).fetchone()
 
         if not user:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "USER_NOT_FOUND",
-                    "message": "Usuario no encontrado"
-                }
-            )
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
         if data.name:
             db.execute(
@@ -299,21 +247,8 @@ def update_user(user_id: str, data: UpdateProfileRequest):
 
         db.commit()
 
-        updated_user = db.execute(
-            text("""
-                SELECT id, name, email, role, active
-                FROM users
-                WHERE id = :id
-            """),
-            {"id": user_id}
-        ).fetchone()
-
         return {
-            "id": str(updated_user.id),
-            "name": updated_user.name,
-            "email": updated_user.email,
-            "roles": [updated_user.role],
-            "active": updated_user.active
+            "message": "Usuario actualizado correctamente"
         }
 
     finally:
@@ -325,20 +260,6 @@ def delete_user(user_id: str):
     db = SessionLocal()
 
     try:
-        user = db.execute(
-            text("SELECT id FROM users WHERE id = :id"),
-            {"id": user_id}
-        ).fetchone()
-
-        if not user:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "USER_NOT_FOUND",
-                    "message": "Usuario no encontrado"
-                }
-            )
-
         db.execute(
             text("DELETE FROM users WHERE id = :id"),
             {"id": user_id}
@@ -351,49 +272,20 @@ def delete_user(user_id: str):
         db.close()
 
 
-# ==========================
-# ROLES
-# ==========================
-
 @app.get("/identity/roles")
 def list_roles():
     return [
-        {
-            "name": "guest",
-            "description": "Invitado",
-            "permissions": []
-        },
-        {
-            "name": "customer",
-            "description": "Cliente",
-            "permissions": ["orders:read"]
-        },
-        {
-            "name": "seller",
-            "description": "Vendedor",
-            "permissions": ["products:create", "products:edit"]
-        },
-        {
-            "name": "admin",
-            "description": "Administrador",
-            "permissions": ["*"]
-        }
+        {"name": "guest", "description": "Invitado", "permissions": []},
+        {"name": "customer", "description": "Cliente", "permissions": ["orders:read"]},
+        {"name": "seller", "description": "Vendedor", "permissions": ["products:create", "products:edit"]},
+        {"name": "admin", "description": "Administrador", "permissions": ["*"]}
     ]
 
 
 @app.get("/identity/permissions")
 def list_permissions():
     return [
-        {
-            "name": "orders:read",
-            "description": "Consultar pedidos"
-        },
-        {
-            "name": "products:create",
-            "description": "Crear productos"
-        },
-        {
-            "name": "products:edit",
-            "description": "Editar productos"
-        }
+        {"name": "orders:read", "description": "Consultar pedidos"},
+        {"name": "products:create", "description": "Crear productos"},
+        {"name": "products:edit", "description": "Editar productos"}
     ]
