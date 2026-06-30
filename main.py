@@ -172,7 +172,7 @@ def login(data: LoginRequest):
 
 
 @app.post("/auth/logout", status_code=204)
-def logout(authorization: str = Header(..., alias="Authorization")):
+def logout(authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no proporcionado")
 
@@ -182,7 +182,7 @@ def logout(authorization: str = Header(..., alias="Authorization")):
     return
 
 
-def get_user_from_token(authorization: str = Header(..., alias="Authorization")):
+def get_user_from_token(authorization: str = Header(...)):
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no proporcionado")
 
