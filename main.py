@@ -1,9 +1,9 @@
 import os
 import hashlib
 from uuid import uuid4
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -17,11 +17,13 @@ if not DATABASE_URL:
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 
+session_tokens = {}
+
 
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
     version="1.0.0",
-    description="Primera versión funcional con Supabase"
+    description="versión funcional con Supabase "
 )
 
 
@@ -33,11 +35,16 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hash_password(password) == password_hash
 
 
+def issue_token(user_id: str):
+    token = str(uuid4())
+    session_tokens[token] = user_id
+    return token
+
+
 class RegisterRequest(BaseModel):
     name: str
     email: EmailStr
     password: str
-    role: Optional[str] = "customer"
 
 
 class LoginRequest(BaseModel):
@@ -45,12 +52,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class ValidateRequest(BaseModel):
-    access_token: str
-
-
 class UpdateProfileRequest(BaseModel):
     name: Optional[str] = None
+
+
+class DeleteUserRequest(BaseModel):
+    current_password: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AuthData(BaseModel):
+    user_id: str
+    roles: List[str]
 
 
 @app.get("/")
@@ -88,14 +105,16 @@ def register(data: RegisterRequest):
                 "name": data.name,
                 "email": data.email,
                 "password_hash": password_hash,
-                "role": data.role
+                "role": "customer"
             }
         )
 
         db.commit()
 
+        access_token = issue_token(user_id)
+
         return {
-            "access_token": "jwt-demo-token",
+            "access_token": access_token,
             "refresh_token": "refresh-demo-token",
             "token_type": "Bearer",
             "expires_in": 3600,
@@ -103,7 +122,7 @@ def register(data: RegisterRequest):
                 "id": user_id,
                 "name": data.name,
                 "email": data.email,
-                "roles": [data.role],
+                "roles": ["customer"],
                 "active": True
             }
         }
@@ -132,8 +151,10 @@ def login(data: LoginRequest):
         if not verify_password(data.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
+        access_token = issue_token(str(user.id))
+
         return {
-            "access_token": "jwt-demo-token",
+            "access_token": access_token,
             "refresh_token": "refresh-demo-token",
             "token_type": "Bearer",
             "expires_in": 3600,
@@ -151,23 +172,111 @@ def login(data: LoginRequest):
 
 
 @app.post("/auth/logout", status_code=204)
-def logout():
+def logout(authorization: str = Header(..., alias="Authorization")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token no proporcionado")
+
+    token = authorization.split(" ", 1)[1]
+    session_tokens.pop(token, None)
+
     return
 
 
-@app.post("/auth/validate")
-def validate(data: ValidateRequest):
-    if data.access_token != "jwt-demo-token":
+def get_user_from_token(authorization: str = Header(..., alias="Authorization")):
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token no proporcionado")
+
+    token = authorization.split(" ", 1)[1]
+    user_id = session_tokens.get(token)
+
+    if not user_id:
         raise HTTPException(status_code=401, detail="Token inválido")
 
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("""
+                SELECT id, role, active
+                FROM users
+                WHERE id = :id
+            """),
+            {"id": user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(status_code=401, detail="Token inválido")
+
+        if not user.active:
+            raise HTTPException(status_code=403, detail="Usuario inactivo")
+
+        return AuthData(user_id=str(user.id), roles=[user.role])
+
+    finally:
+        db.close()
+
+
+def require_admin(user: AuthData = Depends(get_user_from_token)):
+    if "admin" not in user.roles:
+        raise HTTPException(status_code=403, detail="Solo administradores pueden acceder")
+
+    return user
+
+
+@app.post("/auth/validate")
+def validate(user: AuthData = Depends(get_user_from_token)):
     return {
         "valid": True,
-        "message": "Token válido"
+        "user": {
+            "id": user.user_id,
+            "roles": user.roles
+        }
+    }
+
+
+@app.get("/auth/me")
+def me(auth: AuthData = Depends(get_user_from_token)):
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("""
+                SELECT id, name, email, role, active
+                FROM users
+                WHERE id = :id
+            """),
+            {"id": auth.user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        return {
+            "id": str(user.id),
+            "name": user.name,
+            "email": user.email,
+            "roles": [user.role],
+            "active": user.active
+        }
+
+    finally:
+        db.close()
+
+
+@app.post("/auth/refresh")
+def refresh_token(auth: AuthData = Depends(get_user_from_token)):
+    new_token = issue_token(auth.user_id)
+
+    return {
+        "access_token": new_token,
+        "refresh_token": "refresh-demo-token",
+        "token_type": "Bearer",
+        "expires_in": 3600
     }
 
 
 @app.get("/users")
-def list_users():
+def list_users(admin: AuthData = Depends(require_admin)):
     db = SessionLocal()
 
     try:
@@ -198,7 +307,13 @@ def list_users():
 
 
 @app.get("/users/{user_id}")
-def get_user(user_id: str):
+def get_user(user_id: str, auth: AuthData = Depends(get_user_from_token)):
+    if "admin" not in auth.roles and auth.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="No puedes ver datos de otro usuario"
+        )
+
     db = SessionLocal()
 
     try:
@@ -227,7 +342,11 @@ def get_user(user_id: str):
 
 
 @app.put("/users/{user_id}")
-def update_user(user_id: str, data: UpdateProfileRequest):
+def update_user(
+    user_id: str,
+    data: UpdateProfileRequest,
+    admin: AuthData = Depends(require_admin)
+):
     db = SessionLocal()
 
     try:
@@ -256,10 +375,45 @@ def update_user(user_id: str, data: UpdateProfileRequest):
 
 
 @app.delete("/users/{user_id}", status_code=204)
-def delete_user(user_id: str):
+def delete_user(
+    user_id: str,
+    data: Optional[DeleteUserRequest] = None,
+    auth: AuthData = Depends(get_user_from_token)
+):
     db = SessionLocal()
 
     try:
+        target = db.execute(
+            text("SELECT id, password_hash FROM users WHERE id = :id"),
+            {"id": user_id}
+        ).fetchone()
+
+        if not target:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        if "admin" in auth.roles:
+            db.execute(
+                text("DELETE FROM users WHERE id = :id"),
+                {"id": user_id}
+            )
+            db.commit()
+            return
+
+        if auth.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo el propietario puede eliminar su cuenta"
+            )
+
+        if not data or not data.current_password:
+            raise HTTPException(
+                status_code=401,
+                detail="Contraseña requerida para eliminar la cuenta"
+            )
+
+        if not verify_password(data.current_password, target.password_hash):
+            raise HTTPException(status_code=401, detail="Contraseña incorrecta")
+
         db.execute(
             text("DELETE FROM users WHERE id = :id"),
             {"id": user_id}
@@ -272,20 +426,96 @@ def delete_user(user_id: str):
         db.close()
 
 
+@app.patch("/users/{user_id}/password")
+def change_password(
+    user_id: str,
+    data: ChangePasswordRequest,
+    auth: AuthData = Depends(get_user_from_token)
+):
+    if auth.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo puedes cambiar tu propia contraseña"
+        )
+
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("SELECT id, password_hash FROM users WHERE id = :id"),
+            {"id": user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+        if not verify_password(data.current_password, user.password_hash):
+            raise HTTPException(
+                status_code=401,
+                detail="Contraseña actual incorrecta"
+            )
+
+        db.execute(
+            text("""
+                UPDATE users
+                SET password_hash = :password_hash
+                WHERE id = :id
+            """),
+            {
+                "password_hash": hash_password(data.new_password),
+                "id": user_id
+            }
+        )
+
+        db.commit()
+
+        return {
+            "message": "Contraseña actualizada correctamente"
+        }
+
+    finally:
+        db.close()
+
+
 @app.get("/identity/roles")
 def list_roles():
     return [
-        {"name": "guest", "description": "Invitado", "permissions": []},
-        {"name": "customer", "description": "Cliente", "permissions": ["orders:read"]},
-        {"name": "seller", "description": "Vendedor", "permissions": ["products:create", "products:edit"]},
-        {"name": "admin", "description": "Administrador", "permissions": ["*"]}
+        {
+            "name": "guest",
+            "description": "Invitado",
+            "permissions": []
+        },
+        {
+            "name": "customer",
+            "description": "Cliente",
+            "permissions": ["orders:read"]
+        },
+        {
+            "name": "seller",
+            "description": "Vendedor",
+            "permissions": ["products:create", "products:edit"]
+        },
+        {
+            "name": "admin",
+            "description": "Administrador",
+            "permissions": ["*"]
+        }
     ]
 
 
 @app.get("/identity/permissions")
 def list_permissions():
     return [
-        {"name": "orders:read", "description": "Consultar pedidos"},
-        {"name": "products:create", "description": "Crear productos"},
-        {"name": "products:edit", "description": "Editar productos"}
+        {
+            "name": "orders:read",
+            "description": "Consultar pedidos"
+        },
+        {
+            "name": "products:create",
+            "description": "Crear productos"
+        },
+        {
+            "name": "products:edit",
+            "description": "Editar productos"
+        }
     ]
