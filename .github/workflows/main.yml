@@ -1,0 +1,85 @@
+name: CI E3 - Pruebas Automatizadas
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Base de datos PostgreSQL real y temporal para que los UUID de Supabase funcionen nativos
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: marketplace_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Descargar código fuente
+      uses: actions/checkout@v4
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Instalar dependencias de Python
+      run: |
+        python -m pip install --upgrade pip
+        # Entramos a Render porque ahí está el archivo de dependencias según image_8e94e1.png
+        cd Render
+        pip install -r Requirements.txt
+
+    - name: Instalar dependencias de Node.js
+      run: |
+        cd mms-identity-service
+        npm install
+        node server.js & 
+        sleep 3
+
+    # === NUEVO PASO: Convertir al primer usuario en Admin directo en la BD ===
+    - name: Forzar Rol de Administrador en la Base de Datos
+      run: |
+        # Instalamos el cliente de postgres para ejecutar comandos SQL directos
+        sudo apt-get update && sudo apt-get install -y postgresql-client
+        
+        # Levantamos primero el registro simulado del admin a través del script de forma controlada,
+        # o dejamos que el script de bash se encargue. (Mejor lo manejamos dentro del .sh para tener el email exacto).
+
+    - name: Levantar Identity Service (Main.py)
+      env:
+        DATABASE_URL: "postgresql://test_user:test_password@localhost:5432/marketplace_test"
+      run: |
+        # Entramos a Render para ejecutar el servidor directamente desde ahí
+        cd Render
+        uvicorn Main:app --host 127.0.0.1 --port 3000 &
+        sleep 5
+
+    - name: Configurar Node.js (Para tus pruebas en JS)
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Instalar dependencias de Node.js
+      run: |
+        # Entramos a tu servicio de JS para preparar las pruebas
+        cd mms-identity-service
+        npm install
+
+    - name: Ejecutar Suite de Pruebas E2E
+      run: |
+        # Entramos a tu carpeta donde está el script ejecutable según image_8e94e1.png
+        cd mms-identity-service
+        bash test_e2e.sh
