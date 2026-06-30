@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
@@ -26,7 +26,7 @@ security = HTTPBearer()
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
     version="1.0.0",
-    description="versión funcional con Supabase"
+    description="Versión funcional con Supabase"
 )
 
 
@@ -45,27 +45,33 @@ def issue_token(user_id: str):
 
 
 class RegisterRequest(BaseModel):
-    name: str
-    email: EmailStr
-    password: str
+    name: str = Field(example="Benjamín Barrientos")
+    email: EmailStr = Field(example="benjamin.barrientos@gmail.com")
+    password: str = Field(example="Passw0rd!")
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
+    email: EmailStr = Field(example="benjamin.barrientos@gmail.com")
+    password: str = Field(example="Passw0rd!")
 
 
 class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(
+        default=None,
+        example="Benjamín Barrientos Soto"
+    )
 
 
 class DeleteUserRequest(BaseModel):
-    current_password: Optional[str] = None
+    current_password: Optional[str] = Field(
+        default=None,
+        example="Passw0rd!"
+    )
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(example="Passw0rd!")
+    new_password: str = Field(example="NuevaPass2026!")
 
 
 class AuthData(BaseModel):
@@ -79,7 +85,7 @@ def root():
         "service": "Identity Service",
         "status": "running",
         "database": "Supabase PostgreSQL",
-        "version": "v2-httpbearer"
+        "version": "v3-swagger-examples"
     }
 
 
@@ -365,7 +371,11 @@ def update_user(
 
         db.commit()
 
-        return {"message": "Usuario actualizado correctamente"}
+        return {
+            "message": "Usuario actualizado correctamente",
+            "user_id": user_id,
+            "updated_fields": ["name"]
+        }
 
     finally:
         db.close()
@@ -466,7 +476,10 @@ def change_password(
 
         db.commit()
 
-        return {"message": "Contraseña actualizada correctamente"}
+        return {
+            "message": "Contraseña actualizada correctamente",
+            "user_id": user_id
+        }
 
     finally:
         db.close()
@@ -475,17 +488,91 @@ def change_password(
 @app.get("/identity/roles")
 def list_roles():
     return [
-        {"name": "guest", "description": "Invitado", "permissions": []},
-        {"name": "customer", "description": "Cliente", "permissions": ["orders:read"]},
-        {"name": "seller", "description": "Vendedor", "permissions": ["products:create", "products:edit"]},
-        {"name": "admin", "description": "Administrador", "permissions": ["*"]}
+        {
+            "name": "guest",
+            "description": "Usuario invitado sin sesión iniciada",
+            "permissions": []
+        },
+        {
+            "name": "customer",
+            "description": "Cliente registrado del marketplace",
+            "permissions": [
+                "profile:read",
+                "profile:update",
+                "orders:read",
+                "orders:create"
+            ]
+        },
+        {
+            "name": "seller",
+            "description": "Vendedor autorizado para gestionar productos",
+            "permissions": [
+                "products:create",
+                "products:read",
+                "products:update",
+                "products:delete",
+                "orders:read"
+            ]
+        },
+        {
+            "name": "admin",
+            "description": "Administrador del sistema",
+            "permissions": [
+                "users:read",
+                "users:update",
+                "users:delete",
+                "roles:read",
+                "sessions:manage"
+            ]
+        }
     ]
 
 
 @app.get("/identity/permissions")
 def list_permissions():
     return [
-        {"name": "orders:read", "description": "Consultar pedidos"},
-        {"name": "products:create", "description": "Crear productos"},
-        {"name": "products:edit", "description": "Editar productos"}
+        {
+            "name": "profile:read",
+            "description": "Consultar el perfil propio del usuario autenticado"
+        },
+        {
+            "name": "profile:update",
+            "description": "Actualizar datos básicos del perfil propio"
+        },
+        {
+            "name": "orders:read",
+            "description": "Consultar pedidos asociados al usuario"
+        },
+        {
+            "name": "orders:create",
+            "description": "Crear un nuevo pedido en el marketplace"
+        },
+        {
+            "name": "products:create",
+            "description": "Crear productos en el catálogo"
+        },
+        {
+            "name": "products:update",
+            "description": "Actualizar información de productos existentes"
+        },
+        {
+            "name": "products:delete",
+            "description": "Eliminar productos del catálogo"
+        },
+        {
+            "name": "users:read",
+            "description": "Listar y consultar usuarios del sistema"
+        },
+        {
+            "name": "users:update",
+            "description": "Actualizar datos de usuarios desde administración"
+        },
+        {
+            "name": "users:delete",
+            "description": "Eliminar usuarios desde administración"
+        },
+        {
+            "name": "sessions:manage",
+            "description": "Gestionar sesiones activas de usuarios"
+        }
     ]
