@@ -8,7 +8,6 @@ API REST del Grupo 2. Gestiona autenticación, usuarios, sesiones, roles y permi
 
 ## URLs disponibles
 - Documentación Swagger: https://grupo2-identidadusuario.onrender.com/docs
-- URL Base del Mock: https://grupo2-identidadusuario.onrender.com
 
 ## Endpoints principales
 
