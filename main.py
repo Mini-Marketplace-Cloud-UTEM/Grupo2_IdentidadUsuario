@@ -3,7 +3,8 @@ import hashlib
 from uuid import uuid4
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -19,11 +20,13 @@ SessionLocal = sessionmaker(bind=engine)
 
 session_tokens = {}
 
+security = HTTPBearer()
+
 
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
     version="1.0.0",
-    description="versión funcional con Supabase "
+    description="versión funcional con Supabase"
 )
 
 
@@ -75,7 +78,8 @@ def root():
     return {
         "service": "Identity Service",
         "status": "running",
-        "database": "Supabase PostgreSQL"
+        "database": "Supabase PostgreSQL",
+        "version": "v2-httpbearer"
     }
 
 
@@ -171,22 +175,10 @@ def login(data: LoginRequest):
         db.close()
 
 
-@app.post("/auth/logout", status_code=204)
-def logout(authorization: str = Header(...)):
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token no proporcionado")
-
-    token = authorization.split(" ", 1)[1]
-    session_tokens.pop(token, None)
-
-    return
-
-
-def get_user_from_token(authorization: str = Header(...)):
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token no proporcionado")
-
-    token = authorization.split(" ", 1)[1]
+def get_user_from_token(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
     user_id = session_tokens.get(token)
 
     if not user_id:
@@ -221,6 +213,13 @@ def require_admin(user: AuthData = Depends(get_user_from_token)):
         raise HTTPException(status_code=403, detail="Solo administradores pueden acceder")
 
     return user
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    session_tokens.pop(token, None)
+    return
 
 
 @app.post("/auth/validate")
@@ -366,9 +365,7 @@ def update_user(
 
         db.commit()
 
-        return {
-            "message": "Usuario actualizado correctamente"
-        }
+        return {"message": "Usuario actualizado correctamente"}
 
     finally:
         db.close()
@@ -469,9 +466,7 @@ def change_password(
 
         db.commit()
 
-        return {
-            "message": "Contraseña actualizada correctamente"
-        }
+        return {"message": "Contraseña actualizada correctamente"}
 
     finally:
         db.close()
@@ -480,42 +475,17 @@ def change_password(
 @app.get("/identity/roles")
 def list_roles():
     return [
-        {
-            "name": "guest",
-            "description": "Invitado",
-            "permissions": []
-        },
-        {
-            "name": "customer",
-            "description": "Cliente",
-            "permissions": ["orders:read"]
-        },
-        {
-            "name": "seller",
-            "description": "Vendedor",
-            "permissions": ["products:create", "products:edit"]
-        },
-        {
-            "name": "admin",
-            "description": "Administrador",
-            "permissions": ["*"]
-        }
+        {"name": "guest", "description": "Invitado", "permissions": []},
+        {"name": "customer", "description": "Cliente", "permissions": ["orders:read"]},
+        {"name": "seller", "description": "Vendedor", "permissions": ["products:create", "products:edit"]},
+        {"name": "admin", "description": "Administrador", "permissions": ["*"]}
     ]
 
 
 @app.get("/identity/permissions")
 def list_permissions():
     return [
-        {
-            "name": "orders:read",
-            "description": "Consultar pedidos"
-        },
-        {
-            "name": "products:create",
-            "description": "Crear productos"
-        },
-        {
-            "name": "products:edit",
-            "description": "Editar productos"
-        }
+        {"name": "orders:read", "description": "Consultar pedidos"},
+        {"name": "products:create", "description": "Crear productos"},
+        {"name": "products:edit", "description": "Editar productos"}
     ]
