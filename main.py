@@ -1,10 +1,12 @@
 import os
 import hashlib
 from uuid import uuid4
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -15,18 +17,20 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("Falta configurar DATABASE_URL")
 
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "clave-demo-cambiar-en-produccion")
+JWT_ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+REFRESH_TOKEN_EXPIRE_DAYS = 7
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 
-session_tokens = {}
-
 security = HTTPBearer()
-
 
 app = FastAPI(
     title="Mini Marketplace Cloud - Identidad, Usuarios y Sesiones",
     version="1.0.0",
-    description="Versión funcional con Supabase"
+    description="Versión funcional con Supabase y JWT"
 )
 
 
@@ -38,10 +42,35 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hash_password(password) == password_hash
 
 
-def issue_token(user_id: str):
-    token = str(uuid4())
-    session_tokens[token] = user_id
-    return token
+def create_token(user_id: str, roles: List[str], token_type: str, expires_delta: timedelta):
+    expire = datetime.now(timezone.utc) + expires_delta
+
+    payload = {
+        "sub": user_id,
+        "roles": roles,
+        "type": token_type,
+        "exp": expire
+    }
+
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def create_access_token(user_id: str, roles: List[str]):
+    return create_token(
+        user_id=user_id,
+        roles=roles,
+        token_type="access",
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+
+
+def create_refresh_token(user_id: str, roles: List[str]):
+    return create_token(
+        user_id=user_id,
+        roles=roles,
+        token_type="refresh",
+        expires_delta=timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    )
 
 
 class RegisterRequest(BaseModel):
@@ -55,18 +84,24 @@ class LoginRequest(BaseModel):
     password: str = Field(example="Passw0rd!")
 
 
-class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = Field(
-        default=None,
-        example="Benjamín Barrientos Soto"
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(
+        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     )
+
+
+class ValidateRequest(BaseModel):
+    access_token: str = Field(
+        example="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    )
+
+
+class UpdateProfileRequest(BaseModel):
+    name: Optional[str] = Field(default=None, example="Benjamín Barrientos Soto")
 
 
 class DeleteUserRequest(BaseModel):
-    current_password: Optional[str] = Field(
-        default=None,
-        example="Passw0rd!"
-    )
+    current_password: Optional[str] = Field(default=None, example="Passw0rd!")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -85,7 +120,8 @@ def root():
         "service": "Identity Service",
         "status": "running",
         "database": "Supabase PostgreSQL",
-        "version": "v3-swagger-examples"
+        "auth": "JWT",
+        "version": "v4-jwt"
     }
 
 
@@ -103,6 +139,8 @@ def register(data: RegisterRequest):
             raise HTTPException(status_code=409, detail="El email ya está registrado")
 
         user_id = str(uuid4())
+        role = "customer"
+        roles = [role]
         password_hash = hash_password(data.password)
 
         db.execute(
@@ -115,24 +153,25 @@ def register(data: RegisterRequest):
                 "name": data.name,
                 "email": data.email,
                 "password_hash": password_hash,
-                "role": "customer"
+                "role": role
             }
         )
 
         db.commit()
 
-        access_token = issue_token(user_id)
+        access_token = create_access_token(user_id, roles)
+        refresh_token = create_refresh_token(user_id, roles)
 
         return {
             "access_token": access_token,
-            "refresh_token": "refresh-demo-token",
+            "refresh_token": refresh_token,
             "token_type": "Bearer",
-            "expires_in": 3600,
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": {
                 "id": user_id,
                 "name": data.name,
                 "email": data.email,
-                "roles": ["customer"],
+                "roles": roles,
                 "active": True
             }
         }
@@ -161,18 +200,23 @@ def login(data: LoginRequest):
         if not verify_password(data.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-        access_token = issue_token(str(user.id))
+        if not user.active:
+            raise HTTPException(status_code=403, detail="Usuario inactivo")
+
+        roles = [user.role]
+        access_token = create_access_token(str(user.id), roles)
+        refresh_token = create_refresh_token(str(user.id), roles)
 
         return {
             "access_token": access_token,
-            "refresh_token": "refresh-demo-token",
+            "refresh_token": refresh_token,
             "token_type": "Bearer",
-            "expires_in": 3600,
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             "user": {
                 "id": str(user.id),
                 "name": user.name,
                 "email": user.email,
-                "roles": [user.role],
+                "roles": roles,
                 "active": user.active
             }
         }
@@ -181,14 +225,29 @@ def login(data: LoginRequest):
         db.close()
 
 
+def decode_token(token: str, expected_type: str):
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+
+        if payload.get("type") != expected_type:
+            raise HTTPException(status_code=401, detail="Tipo de token inválido")
+
+        user_id = payload.get("sub")
+        roles = payload.get("roles", [])
+
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Token inválido")
+
+        return AuthData(user_id=user_id, roles=roles)
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado")
+
+
 def get_user_from_token(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
-    token = credentials.credentials
-    user_id = session_tokens.get(token)
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Token inválido")
+    auth = decode_token(credentials.credentials, expected_type="access")
 
     db = SessionLocal()
 
@@ -199,7 +258,7 @@ def get_user_from_token(
                 FROM users
                 WHERE id = :id
             """),
-            {"id": user_id}
+            {"id": auth.user_id}
         ).fetchone()
 
         if not user:
@@ -222,14 +281,12 @@ def require_admin(user: AuthData = Depends(get_user_from_token)):
 
 
 @app.post("/auth/logout", status_code=204)
-def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-    session_tokens.pop(token, None)
+def logout():
     return
 
 
 @app.post("/auth/validate")
-def validate(user: AuthData = Depends(get_user_from_token)):
+def validate(data: Optional[ValidateRequest] = None, user: AuthData = Depends(get_user_from_token)):
     return {
         "valid": True,
         "user": {
@@ -269,15 +326,41 @@ def me(auth: AuthData = Depends(get_user_from_token)):
 
 
 @app.post("/auth/refresh")
-def refresh_token(auth: AuthData = Depends(get_user_from_token)):
-    new_token = issue_token(auth.user_id)
+def refresh_token(data: RefreshRequest):
+    auth = decode_token(data.refresh_token, expected_type="refresh")
 
-    return {
-        "access_token": new_token,
-        "refresh_token": "refresh-demo-token",
-        "token_type": "Bearer",
-        "expires_in": 3600
-    }
+    db = SessionLocal()
+
+    try:
+        user = db.execute(
+            text("""
+                SELECT id, role, active
+                FROM users
+                WHERE id = :id
+            """),
+            {"id": auth.user_id}
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(status_code=401, detail="Usuario no encontrado")
+
+        if not user.active:
+            raise HTTPException(status_code=403, detail="Usuario inactivo")
+
+        roles = [user.role]
+
+        new_access_token = create_access_token(str(user.id), roles)
+        new_refresh_token = create_refresh_token(str(user.id), roles)
+
+        return {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "Bearer",
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        }
+
+    finally:
+        db.close()
 
 
 @app.get("/users")
@@ -531,48 +614,15 @@ def list_roles():
 @app.get("/identity/permissions")
 def list_permissions():
     return [
-        {
-            "name": "profile:read",
-            "description": "Consultar el perfil propio del usuario autenticado"
-        },
-        {
-            "name": "profile:update",
-            "description": "Actualizar datos básicos del perfil propio"
-        },
-        {
-            "name": "orders:read",
-            "description": "Consultar pedidos asociados al usuario"
-        },
-        {
-            "name": "orders:create",
-            "description": "Crear un nuevo pedido en el marketplace"
-        },
-        {
-            "name": "products:create",
-            "description": "Crear productos en el catálogo"
-        },
-        {
-            "name": "products:update",
-            "description": "Actualizar información de productos existentes"
-        },
-        {
-            "name": "products:delete",
-            "description": "Eliminar productos del catálogo"
-        },
-        {
-            "name": "users:read",
-            "description": "Listar y consultar usuarios del sistema"
-        },
-        {
-            "name": "users:update",
-            "description": "Actualizar datos de usuarios desde administración"
-        },
-        {
-            "name": "users:delete",
-            "description": "Eliminar usuarios desde administración"
-        },
-        {
-            "name": "sessions:manage",
-            "description": "Gestionar sesiones activas de usuarios"
-        }
+        {"name": "profile:read", "description": "Consultar el perfil propio del usuario autenticado"},
+        {"name": "profile:update", "description": "Actualizar datos básicos del perfil propio"},
+        {"name": "orders:read", "description": "Consultar pedidos asociados al usuario"},
+        {"name": "orders:create", "description": "Crear un nuevo pedido en el marketplace"},
+        {"name": "products:create", "description": "Crear productos en el catálogo"},
+        {"name": "products:update", "description": "Actualizar información de productos existentes"},
+        {"name": "products:delete", "description": "Eliminar productos del catálogo"},
+        {"name": "users:read", "description": "Listar y consultar usuarios del sistema"},
+        {"name": "users:update", "description": "Actualizar datos de usuarios desde administración"},
+        {"name": "users:delete", "description": "Eliminar usuarios desde administración"},
+        {"name": "sessions:manage", "description": "Gestionar sesiones activas de usuarios"}
     ]
