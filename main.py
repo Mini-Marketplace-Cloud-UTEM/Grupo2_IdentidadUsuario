@@ -3,8 +3,9 @@ import hashlib
 from uuid import uuid4
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-
-from fastapi import Depends, FastAPI, HTTPException
+import requests
+import uuid
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 from pydantic import BaseModel, EmailStr, Field
@@ -626,3 +627,81 @@ def list_permissions():
         {"name": "users:delete", "description": "Eliminar usuarios desde administración"},
         {"name": "sessions:manage", "description": "Gestionar sesiones activas de usuarios"}
     ]
+
+@app.post("/integration/grupo5/create-order")
+def create_order_group5(
+    request: Request,
+    auth: AuthData = Depends(get_user_from_token)
+):
+    correlation_id = request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
+    idempotency_key = str(uuid.uuid4())
+
+    body = {
+        "userId": auth.user_id,
+        "items": [
+            {
+                "product_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                "name": "Producto demo integración E4",
+                "quantity": 1,
+                "unit_price": 15000,
+                "subtotal": 15000
+            }
+        ],
+        "shippingAddress": {
+            "street": "Av. Ecuador 3769",
+            "city": "Santiago",
+            "region": "Metropolitana",
+            "country": "Chile",
+            "postal_code": "9170124"
+        },
+        "notes": "Pedido creado desde Grupo 2 - Identidad para demo E4"
+    }
+
+    try:
+        response = requests.post(
+            "https://api-grupo5-pedidos.onrender.com/orders",
+            json=body,
+            headers={
+                "Authorization": request.headers.get("Authorization", ""),
+                "X-Correlation-Id": correlation_id,
+                "x-correlation-id": correlation_id,
+                "Idempotency-Key": idempotency_key,
+                "X-Consumer": "grupo2-identidad"
+            },
+            timeout=15
+        )
+
+        try:
+            remote_response = response.json()
+        except ValueError:
+            remote_response = response.text
+
+        return {
+            "integration": "grupo5-pedidos",
+            "status": "success" if response.status_code < 400 else "remote_error",
+            "correlationId": correlation_id,
+            "idempotencyKey": idempotency_key,
+            "authenticated_user": {
+                "id": auth.user_id,
+                "roles": auth.roles
+            },
+            "remote_status_code": response.status_code,
+            "remote_response": remote_response
+        }
+
+    except requests.Timeout:
+        return {
+            "integration": "grupo5-pedidos",
+            "status": "timeout",
+            "message": "El servicio de Grupo 5 Pedidos no respondió a tiempo",
+            "correlationId": correlation_id
+        }
+
+    except requests.RequestException as e:
+        return {
+            "integration": "grupo5-pedidos",
+            "status": "connection_error",
+            "message": "No se pudo conectar con el servicio de Grupo 5 Pedidos",
+            "detail": str(e),
+            "correlationId": correlation_id
+        }
