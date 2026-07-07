@@ -287,15 +287,16 @@ def logout():
 
 
 @app.post("/auth/validate")
-def validate(data: Optional[ValidateRequest] = None, user: AuthData = Depends(get_user_from_token)):
+def validate(user: AuthData = Depends(get_user_from_token)):
     return {
         "valid": True,
+        "userId": user.user_id,
+        "roles": user.roles,
         "user": {
             "id": user.user_id,
             "roles": user.roles
         }
     }
-
 
 @app.get("/auth/me")
 def me(auth: AuthData = Depends(get_user_from_token)):
